@@ -1,0 +1,5 @@
+{
+  "name": "MangaNexus: Admin & Discovery Hub",
+  "description": "A comprehensive React-based management dashboard and discovery platform for Manga and Anime content, featuring AI-powered summaries, detailed analytics, and a sleek dark-themed interface.",
+  "requestFramePermissions": []
+}
