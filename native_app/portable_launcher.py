@@ -12,11 +12,24 @@ VOICES_PATH = MODEL_DIR / "voices-v1.0.bin"
 DEFAULT_VOICE = "am_michael"
 
 
+class PortableKokoroSrtApp(KokoroSrtApp):
+    """Portable wrapper with a Tcl-safe default font declaration on Windows."""
+
+    def option_add(self, pattern, value, priority=None):
+        # Tk parses an unquoted value such as "Segoe UI 10" as
+        # family="Segoe", size="UI", which raises: expected integer but got "UI".
+        if pattern == "*Font" and value == "Segoe UI 10":
+            value = "{Segoe UI} 10"
+        if priority is None:
+            return super().option_add(pattern, value)
+        return super().option_add(pattern, value, priority)
+
+
 providers = set(available_providers())
 has_gpu = "CUDAExecutionProvider" in providers or "DmlExecutionProvider" in providers
 model_path = FP16_MODEL if has_gpu and FP16_MODEL.is_file() else INT8_MODEL
 
-app = KokoroSrtApp()
+app = PortableKokoroSrtApp()
 app.speed_var.set(1.0)
 app.device_var.set(AUTO_DEVICE)
 
