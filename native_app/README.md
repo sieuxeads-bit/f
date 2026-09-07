@@ -1,70 +1,89 @@
-# Kokoro SRT Local — native app
+# Kokoro SRT Studio — native local app
 
-Bản này **không chạy bằng web**. Đây là app desktop Python/Tkinter dùng ONNX Runtime local, theo kiểu Piper:
+App desktop local kiểu Piper: chọn model/voice/SRT và dựng WAV trực tiếp bằng ONNX Runtime, không cần browser và không cần Python hệ thống.
 
-- chọn file `kokoro-v1.0.onnx`
-- chọn file `voices-v1.0.bin`
-- chọn file subtitle `.srt`
-- chọn voice + speed
-- tạo từng câu theo timestamp SRT
-- ghép toàn bộ thành một file WAV
+## Chạy nhanh trên Windows
 
-## Model nên dùng
-
-App được thiết kế cho cặp file Kokoro v1.0 của `thewh1teagle/kokoro-onnx`:
-
-- `kokoro-v1.0.onnx`
-- `voices-v1.0.bin`
-
-Repo `onnx-community/Kokoro-82M-v1.0-ONNX` trên Hugging Face đóng gói model/voice khác một chút: nhiều file voice `.bin` riêng. Để có trải nghiệm giống Piper nhất, dùng cặp model + voices ở trên.
-
-## Windows — cách chạy nhanh
-
-Yêu cầu: Python 3.12 x64.
-
-1. Chạy `download_models_windows.bat` để tải model vào thư mục `models`.
-2. Chạy `run_windows.bat`.
-3. Trong app chọn:
-   - Model: `models/kokoro-v1.0.onnx`
-   - Voices: `models/voices-v1.0.bin`
-   - SRT: file subtitle của bạn
-   - Output: file WAV muốn lưu
-4. Bấm **Nạp voices** rồi chọn voice.
-5. Bấm **Tạo voice từ SRT**.
-
-Lần đầu `run_windows.bat` sẽ tự tạo `.venv` và cài dependency. Các lần sau vẫn chạy local; không cần browser.
-
-## Build file EXE
-
-Chạy:
+Chỉ cần chạy:
 
 ```bat
-build_windows_exe.bat
+START_PORTABLE.bat
 ```
 
-Nếu build thành công, file nằm ở:
+Launcher sẽ dùng cache tại:
 
 ```text
-dist\KokoroSRT.exe
+%LOCALAPPDATA%\KokoroSRT
 ```
 
-Sau đó có thể đặt cạnh thư mục model và chạy như app desktop.
+Không cần quyền admin. Runtime và model được tái sử dụng ở những lần chạy sau.
+
+## GPU + tối ưu tốc độ
+
+Bản hiện tại tự phát hiện backend:
+
+- **NVIDIA**: cài `onnxruntime-gpu==1.26.0`, preload CUDA/cuDNN từ Python packages và ưu tiên `CUDAExecutionProvider`.
+- **AMD / Intel Arc**: thử `onnxruntime-directml==1.24.4` và `DmlExecutionProvider`.
+- **CPU fallback**: dùng `CPUExecutionProvider` với số thread theo CPU máy.
+
+Model mặc định cũng đổi theo thiết bị:
+
+- GPU: `kokoro-v1.0.fp16.onnx` (~169 MB)
+- CPU: `kokoro-v1.0.int8.onnx` (~88 MB)
+- Voices: `voices-v1.0.bin`
+
+Nếu GPU runtime không khởi tạo được, launcher tự phục hồi ONNX Runtime CPU để app vẫn chạy.
+
+Trong app có menu **Thiết bị**:
+
+- `Auto (GPU ưu tiên)`
+- `NVIDIA CUDA` nếu khả dụng
+- `Windows DirectML` nếu khả dụng
+- `CPU`
+
+App hiển thị backend đang dùng và benchmark dạng `x realtime` sau khi dựng xong.
+
+## Các tối ưu trong pipeline SRT
+
+- ONNX session được tạo với graph optimization mức `ORT_ENABLE_ALL`.
+- CPU dùng nhiều thread; GPU dùng provider chuyên dụng với CPU fallback cho node không hỗ trợ.
+- Model/session được giữ trong RAM, không reload cho từng cue.
+- Voice style được resolve một lần trước vòng lặp SRT.
+- Audio từng cue được giữ thành chunk, sau đó cấp phát timeline **một lần ở cuối** thay vì liên tục mở rộng mảng.
+- UI chỉ cập nhật trạng thái theo cụm cue để giảm overhead Tkinter trên SRT dài.
+- Có nút **Dừng** để hủy sau cue hiện tại.
+
+## GUI
+
+GUI dùng dark desktop theme mới với:
+
+- badge backend GPU/CPU
+- card thống kê hiệu năng
+- số cue + thời lượng subtitle
+- progress rõ ràng
+- chọn device/voice/language/speed
+- log gọn và có nút xóa
 
 ## Cách ghép SRT
 
-Mỗi subtitle cue được synthesize riêng. Audio được đặt vào đúng thời điểm bắt đầu của cue. Nếu bật **Fit câu dài vào đúng ô thời gian SRT**, câu dài hơn slot subtitle sẽ được co lại để tránh đè quá nhiều sang cue tiếp theo.
+Mỗi cue được synthesize riêng. Audio bắt đầu tại timestamp của cue. Nếu câu trước chưa đọc xong, cue tiếp theo được dời tới sau câu trước để tránh chồng giọng. Vì vậy giọng không bị ép time-stretch làm méo tiếng.
 
-## Ngôn ngữ
+## Model
 
-`kokoro-onnx` dùng phonemizer/eSpeak cho G2P. Trường Language mặc định là `en-us`. Kokoro v1.0 gốc mạnh nhất ở các ngôn ngữ/voice mà model hỗ trợ; chất lượng tiếng Việt không nên kỳ vọng như một model TTS được huấn luyện riêng cho tiếng Việt.
+App được thiết kế cho model Kokoro v1.0 từ `thewh1teagle/kokoro-onnx`:
+
+- `kokoro-v1.0.int8.onnx`
+- `kokoro-v1.0.fp16.onnx`
+- `voices-v1.0.bin`
+
+Repo Hugging Face `onnx-community/Kokoro-82M-v1.0-ONNX` dùng format voices riêng nên không phải drop-in replacement trực tiếp cho bundle `voices-v1.0.bin`.
 
 ## Dependency chính
 
-- `kokoro-onnx==0.5.0`
-- `onnxruntime`
-- `espeakng-loader`
-- `phonemizer-fork`
-- `numpy`
-- `soundfile`
+```text
+kokoro-onnx==0.5.0
+numpy>=2.0.2
+soundfile>=0.13.0
+```
 
-`kokoro-onnx` tự kéo các dependency ONNX Runtime / eSpeak cần thiết.
+`kokoro-onnx` kéo phonemizer/eSpeak. `START_PORTABLE.bat` chịu trách nhiệm chuyển ONNX Runtime sang CUDA/DirectML khi máy có GPU phù hợp.
