@@ -92,9 +92,9 @@ def mix_into_timeline(timeline: np.ndarray, start_sample: int, samples: np.ndarr
     count = min(len(samples), len(timeline) - start_sample)
     if count <= 0:
         return
-    timeline[start_sample:start_sample + count] += samples[:count]
-    np.clip(timeline[start_sample:start_sample + count], -1.0, 1.0,
-            out=timeline[start_sample:start_sample + count])
+    region = timeline[start_sample:start_sample + count]
+    region += samples[:count]
+    np.clip(region, -1.0, 1.0, out=region)
 
 
 class KokoroSrtApp(tk.Tk):
@@ -127,8 +127,7 @@ class KokoroSrtApp(tk.Tk):
         root = ttk.Frame(self, padding=16)
         root.pack(fill='both', expand=True)
 
-        title = ttk.Label(root, text='Kokoro SRT Local', font=('Segoe UI', 20, 'bold'))
-        title.pack(anchor='w')
+        ttk.Label(root, text='Kokoro SRT Local', font=('Segoe UI', 20, 'bold')).pack(anchor='w')
         ttk.Label(
             root,
             text='Native ONNX Runtime — chọn model như Piper, đọc SRT và xuất WAV theo timeline.'
@@ -136,7 +135,6 @@ class KokoroSrtApp(tk.Tk):
 
         files = ttk.LabelFrame(root, text='1. File local', padding=12)
         files.pack(fill='x')
-
         self._path_row(files, 'Model .onnx', self.model_var, self._pick_model)
         self._path_row(files, 'Voices .bin', self.voices_var, self._pick_voices)
         self._path_row(files, 'Subtitle .srt', self.srt_var, self._pick_srt)
@@ -176,8 +174,7 @@ class KokoroSrtApp(tk.Tk):
         self.run_btn.pack(side='left')
         ttk.Button(actions, text='Mở thư mục output', command=self.open_output_folder).pack(side='left', padx=8)
 
-        self.progress = ttk.Progressbar(root, variable=self.progress_var, maximum=100)
-        self.progress.pack(fill='x')
+        ttk.Progressbar(root, variable=self.progress_var, maximum=100).pack(fill='x')
         ttk.Label(root, textvariable=self.status_var, wraplength=850).pack(fill='x', pady=(8, 0))
 
         log_box = ttk.LabelFrame(root, text='Log', padding=8)
@@ -212,10 +209,7 @@ class KokoroSrtApp(tk.Tk):
                 self.output_var.set(str(Path(path).with_name(Path(path).stem + '_kokoro.wav')))
 
     def _pick_output(self) -> None:
-        path = filedialog.asksaveasfilename(
-            defaultextension='.wav',
-            filetypes=[('WAV audio', '*.wav')],
-        )
+        path = filedialog.asksaveasfilename(defaultextension='.wav', filetypes=[('WAV audio', '*.wav')])
         if path:
             self.output_var.set(path)
 
@@ -269,6 +263,11 @@ class KokoroSrtApp(tk.Tk):
             cues = parse_srt(srt)
             if not cues:
                 raise ValueError('Không đọc được cue hợp lệ trong file SRT.')
+
+            requested_voice = self.voice_var.get().strip()
+            speed = float(self.speed_var.get())
+            lang = self.lang_var.get().strip() or 'en-us'
+            fit = bool(self.fit_var.get())
         except Exception as exc:
             messagebox.showerror('Không thể chạy', str(exc))
             return
@@ -277,11 +276,21 @@ class KokoroSrtApp(tk.Tk):
         self.progress_var.set(0)
         threading.Thread(
             target=self._generate_worker,
-            args=(model, voices, cues, output),
+            args=(model, voices, cues, output, requested_voice, speed, lang, fit),
             daemon=True,
         ).start()
 
-    def _generate_worker(self, model: Path, voices: Path, cues: list[Cue], output: Path) -> None:
+    def _generate_worker(
+        self,
+        model: Path,
+        voices: Path,
+        cues: list[Cue],
+        output: Path,
+        requested_voice: str,
+        speed: float,
+        lang: str,
+        fit: bool,
+    ) -> None:
         try:
             signature = (str(model), str(voices))
             if self._kokoro is None or self._loaded_signature != signature:
@@ -290,13 +299,11 @@ class KokoroSrtApp(tk.Tk):
                 self._loaded_signature = signature
 
             available = list(self._kokoro.get_voices())
-            voice = self.voice_var.get() or (available[0] if available else '')
+            voice = requested_voice or (available[0] if available else '')
             if not voice:
                 raise RuntimeError('Không tìm thấy voice trong voices .bin.')
-
-            speed = float(self.speed_var.get())
-            lang = self.lang_var.get().strip() or 'en-us'
-            fit = bool(self.fit_var.get())
+            if available and voice not in available:
+                raise RuntimeError(f'Voice không tồn tại: {voice}')
 
             total_seconds = max(cue.end for cue in cues) + 0.25
             sample_rate: int | None = None
@@ -313,7 +320,6 @@ class KokoroSrtApp(tk.Tk):
                     timeline = np.zeros(int(np.ceil(total_seconds * sr)), dtype=np.float32)
                 elif sr != sample_rate:
                     samples = resample_linear(samples, round(len(samples) * sample_rate / sr))
-                    sr = sample_rate
 
                 assert timeline is not None and sample_rate is not None
                 slot_len = max(1, int(round((cue.end - cue.start) * sample_rate)))
@@ -321,6 +327,9 @@ class KokoroSrtApp(tk.Tk):
                     samples = resample_linear(samples, slot_len)
 
                 start_sample = max(0, int(round(cue.start * sample_rate)))
+                needed = start_sample + len(samples)
+                if needed > len(timeline):
+                    timeline = np.pad(timeline, (0, needed - len(timeline)))
                 mix_into_timeline(timeline, start_sample, samples)
                 self._events.put(('progress', i * 100.0 / len(cues)))
 
