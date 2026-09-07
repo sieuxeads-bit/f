@@ -12,9 +12,8 @@ DEFAULT_VOICE = "am_michael"
 
 app = KokoroSrtApp()
 
-# Natural-speech defaults: avoid aggressive SRT time compression.
-app.speed_var.set(0.90)
-app.fit_var.set(False)
+# Natural speech speed. No SRT compression is used.
+app.speed_var.set(1.0)
 
 if MODEL_PATH.is_file():
     app.model_var.set(str(MODEL_PATH))
