@@ -1,49 +1,46 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-title Kokoro SRT Portable
+title Kokoro SRT Local - One Click
 
-set "PYVER=3.12.8"
-set "RUNTIME=%~dp0runtime"
-set "PYDIR=%LOCALAPPDATA%\KokoroSRT\Python312"
-set "PYEXE=%PYDIR%\python.exe"
-set "PYWEXE=%PYDIR%\pythonw.exe"
-set "PYSETUP=%RUNTIME%\python-setup.exe"
-set "PYLOG=%RUNTIME%\python-install.log"
-set "READY=%PYDIR%\.kokoro_ready"
-set "MODELDIR=%~dp0models"
+set "ROOT=%LOCALAPPDATA%\KokoroSRT"
+set "MAMBA=%ROOT%\micromamba.exe"
+set "MAMBA_ROOT_PREFIX=%ROOT%\mamba_root"
+set "ENV_DIR=%ROOT%\env"
+set "PYEXE=%ENV_DIR%\python.exe"
+set "PYWEXE=%ENV_DIR%\pythonw.exe"
+set "READY=%ROOT%\.kokoro_ready_v3"
+set "MODELDIR=%ROOT%\models"
 set "MODEL=%MODELDIR%\kokoro-v1.0.int8.onnx"
 set "VOICES=%MODELDIR%\voices-v1.0.bin"
+set "MAMBA_URL=https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-win-64"
 
-if not exist "%RUNTIME%" mkdir "%RUNTIME%"
+if not exist "%ROOT%" mkdir "%ROOT%"
 if not exist "%MODELDIR%" mkdir "%MODELDIR%"
 
-if not exist "%PYEXE%" (
-  echo [1/4] Preparing private Python %PYVER% x64...
-  echo No admin rights and no system Python are required.
-  echo Python runtime location:
-  echo %PYDIR%
-  echo.
-
-  echo Downloading Python installer...
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest ('https://www.python.org/ftp/python/' + $env:PYVER + '/python-' + $env:PYVER + '-amd64.exe') -OutFile $env:PYSETUP"
-  if errorlevel 1 goto :download_error
-
-  if exist "%PYDIR%" rmdir /s /q "%PYDIR%"
-
-  echo Installing private Python...
-  echo A small Python installer progress window may appear.
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$args=@('/passive','InstallAllUsers=0',('TargetDir=\"' + $env:PYDIR + '\"'),'Include_exe=1','Include_lib=1','Include_pip=1','Include_tcltk=1','Include_launcher=0','Include_test=0','Include_doc=0','Shortcuts=0','AssociateFiles=0','PrependPath=0','/log',('"' + $env:PYLOG + '"')); $p=Start-Process -FilePath $env:PYSETUP -ArgumentList ($args -join ' ') -Wait -PassThru; exit $p.ExitCode"
-  if errorlevel 1 goto :python_error
-
-  if not exist "%PYEXE%" goto :python_error
-  del /q "%PYSETUP%" 2>nul
+if not exist "%MAMBA%" (
+  echo [1/4] Downloading portable runtime manager...
+  echo No Python installer. No admin rights. No registry changes.
+  echo Cache: %ROOT%
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest $env:MAMBA_URL -OutFile $env:MAMBA"
+  if errorlevel 1 goto :mamba_download_error
 )
 
-if not exist "%PYEXE%" goto :python_error
+if not exist "%PYEXE%" (
+  echo [1/4] Creating private Python 3.12 + Tkinter environment...
+  echo This is a normal file extraction/package step, not a Windows installer.
+  if exist "%ENV_DIR%" rmdir /s /q "%ENV_DIR%"
+  "%MAMBA%" create -y -p "%ENV_DIR%" -c conda-forge python=3.12 tk pip
+  if errorlevel 1 goto :mamba_create_error
+)
+
+if not exist "%PYEXE%" goto :mamba_create_error
+
+"%PYEXE%" -c "import tkinter; print('Tkinter OK', tkinter.TkVersion)" >nul 2>&1
+if errorlevel 1 goto :tk_error
 
 if not exist "%READY%" (
-  echo [2/4] Installing local Kokoro libraries...
+  echo [2/4] Installing Kokoro ONNX libraries...
   set PIP_DISABLE_PIP_VERSION_CHECK=1
   "%PYEXE%" -m pip install --upgrade pip
   if errorlevel 1 goto :pip_error
@@ -59,12 +56,14 @@ if not exist "%MODEL%" (
 )
 
 if not exist "%VOICES%" (
-  echo [3/4] Downloading Kokoro voices...
+  echo [3/4] Downloading Kokoro voices bundle...
   powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest 'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin' -OutFile $env:VOICES"
   if errorlevel 1 goto :model_error
 )
 
+set "KOKORO_MODEL_DIR=%MODELDIR%"
 echo [4/4] Starting Kokoro SRT Local...
+echo Runtime and models will be reused automatically next time.
 if exist "%PYWEXE%" (
   start "" "%PYWEXE%" "%~dp0portable_launcher.py"
 ) else (
@@ -72,41 +71,45 @@ if exist "%PYWEXE%" (
 )
 exit /b 0
 
-:download_error
+:mamba_download_error
 echo.
-echo ERROR: Could not download Python installer.
-echo Check your Internet connection or firewall.
+echo ERROR: Could not download micromamba portable runtime manager.
+echo Check Internet/firewall access to GitHub.
 goto :error
 
-:python_error
+:mamba_create_error
 echo.
-echo ERROR: Python installation did not create:
-echo %PYEXE%
+echo ERROR: Could not create the private Python environment.
+echo Cache folder: %ROOT%
 echo.
-echo Installer log:
-echo %PYLOG%
+echo To retry from zero, delete this folder only:
+echo %ROOT%
+goto :error
+
+:tk_error
 echo.
-echo If this still fails, send python-install.log.
+echo ERROR: Private Python was created but Tkinter is missing.
+echo Delete %ROOT% and run this file again.
 goto :error
 
 :pip_error
 echo.
-echo ERROR: Python is installed, but Kokoro libraries failed to install.
+echo ERROR: Python works, but Kokoro libraries failed to install.
 echo Python: %PYEXE%
 goto :error
 
 :model_error
 echo.
 echo ERROR: Could not download the Kokoro model/voices.
-echo You can retry later; existing Python setup will be reused.
+echo Runtime is already ready; running this file again will retry only the missing files.
 goto :error
 
 :error
 echo.
 echo ============================================================
-echo Setup failed. The message above identifies the failed step.
-echo No admin rights or system Python are required.
-echo Python is kept under LocalAppData; models stay in this app folder.
+echo Setup failed at the step shown above.
+echo Nothing is installed system-wide and admin rights are not needed.
+echo Cache can always be deleted safely: %ROOT%
 echo ============================================================
 pause
 exit /b 1
