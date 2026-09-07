@@ -1,9 +1,23 @@
 from pathlib import Path
 import os
+import subprocess
+import sys
+import time
 import tkinter as tk
 from tkinter import ttk
 
-from app import AUTO_DEVICE, KokoroSrtApp, available_providers
+import numpy as np
+import soundfile as sf
+
+from app import (
+    AUTO_DEVICE,
+    KokoroSrtApp,
+    available_providers,
+    make_kokoro,
+    provider_label,
+    resample_linear,
+    resolve_provider,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -52,7 +66,7 @@ def meta(voice_id: str) -> tuple[str, str, str]:
 
 
 class PortableKokoroSrtApp(KokoroSrtApp):
-    """Portable wrapper with a Tcl-safe default font declaration on Windows."""
+    """Portable wrapper with voice filters and per-scene dubbing export."""
 
     def option_add(self, pattern, value, priority=None):
         if pattern == "*Font" and value == "Segoe UI 10":
@@ -60,6 +74,160 @@ class PortableKokoroSrtApp(KokoroSrtApp):
         if priority is None:
             return super().option_add(pattern, value)
         return super().option_add(pattern, value, priority)
+
+    def start_generate(self) -> None:
+        # Capture this on the Tk main thread. Every SRT gets its own standard
+        # dubbing folder beside the subtitle file.
+        srt_text = self.srt_var.get().strip()
+        if srt_text:
+            self._dubbing_dir = str(Path(srt_text).expanduser().parent / "2_Dubbing_Audio")
+        else:
+            self._dubbing_dir = ""
+        super().start_generate()
+
+    def _generate_worker(
+        self,
+        model: Path,
+        voices: Path,
+        cues,
+        output: Path,
+        requested_voice: str,
+        speed: float,
+        lang: str,
+        device: str,
+    ) -> None:
+        try:
+            provider = resolve_provider(device)
+            signature = (str(model), str(voices), provider)
+            if self._kokoro is None or self._loaded_signature != signature:
+                self._events.put(("status", "Đang nạp ONNX session tối ưu…"))
+                self._kokoro, self._backend_provider = make_kokoro(model, voices, device)
+                self._loaded_signature = (str(model), str(voices), self._backend_provider)
+
+            assert self._kokoro is not None
+            provider = self._backend_provider or provider
+            available = list(self._kokoro.get_voices())
+            voice = requested_voice or (available[0] if available else "")
+            if not voice:
+                raise RuntimeError("Không tìm thấy voice trong voices .bin.")
+            if available and voice not in available:
+                raise RuntimeError(f"Voice không tồn tại: {voice}")
+
+            voice_style = self._kokoro.get_voice_style(voice)
+            started = time.perf_counter()
+            sample_rate: int | None = None
+            cursor_sample = 0
+            chunks: list[tuple[int, np.ndarray]] = []
+            generated_audio_samples = 0
+            total = len(cues)
+
+            dubbing_dir_text = getattr(self, "_dubbing_dir", "")
+            dubbing_dir = Path(dubbing_dir_text) if dubbing_dir_text else output.parent / "2_Dubbing_Audio"
+            dubbing_dir.mkdir(parents=True, exist_ok=True)
+
+            # Remove only scene audio produced by this tool so rerunning with a
+            # shorter SRT cannot leave stale scene_XXX_audio.wav files behind.
+            for old_scene in dubbing_dir.glob("scene_*_audio.wav"):
+                try:
+                    old_scene.unlink()
+                except OSError:
+                    pass
+
+            for scene_index, cue in enumerate(cues):
+                i = scene_index + 1
+                if self._cancel.is_set():
+                    self._events.put(("cancelled", None))
+                    return
+                if i == 1 or i == total or i % 5 == 0:
+                    self._events.put(("status", f"Đang tạo scene {scene_index:03d} · {i}/{total}…"))
+
+                samples, sr = self._kokoro.create(
+                    cue.text,
+                    voice=voice_style,
+                    speed=speed,
+                    lang=lang,
+                    trim=True,
+                )
+                samples = np.asarray(samples, dtype=np.float32).reshape(-1)
+                sr = int(sr)
+                if sample_rate is None:
+                    sample_rate = sr
+                elif sr != sample_rate:
+                    samples = resample_linear(
+                        samples,
+                        round(len(samples) * sample_rate / sr),
+                    )
+
+                assert sample_rate is not None
+
+                # One clean audio file per SRT cue.
+                scene_path = dubbing_dir / f"scene_{scene_index:03d}_audio.wav"
+                sf.write(str(scene_path), samples, sample_rate, subtype="PCM_16")
+
+                requested_start = max(0, int(round(cue.start * sample_rate)))
+                start_sample = max(requested_start, cursor_sample)
+                chunks.append((start_sample, samples))
+                cursor_sample = start_sample + len(samples)
+                generated_audio_samples += len(samples)
+
+                if start_sample > requested_start and (i == 1 or i % 10 == 0):
+                    delay = (start_sample - requested_start) / sample_rate
+                    self._events.put(("log", f"Scene {scene_index:03d}: dời +{delay:.2f}s trong WAV tổng để tránh chồng giọng."))
+                self._events.put(("progress", i * 100.0 / total))
+
+            assert sample_rate is not None
+            final_length = max(
+                cursor_sample,
+                int(round(max(cue.end for cue in cues) * sample_rate)),
+                1,
+            )
+            timeline = np.zeros(final_length, dtype=np.float32)
+            for start_sample, samples in chunks:
+                end = min(start_sample + len(samples), final_length)
+                if end > start_sample:
+                    timeline[start_sample:end] += samples[: end - start_sample]
+            np.clip(timeline, -1.0, 1.0, out=timeline)
+
+            # Keep the mixed WAV as a convenient full-track preview/export.
+            output.parent.mkdir(parents=True, exist_ok=True)
+            sf.write(str(output), timeline, sample_rate, subtype="PCM_16")
+
+            elapsed = max(time.perf_counter() - started, 1e-6)
+            generated_seconds = generated_audio_samples / sample_rate
+            speed_x = generated_seconds / elapsed
+            self._events.put(("log", f"Đã xuất {total} scene vào: {dubbing_dir}"))
+            self._events.put(("done", {
+                "output": str(output),
+                "dubbing_dir": str(dubbing_dir),
+                "elapsed": elapsed,
+                "generated_seconds": generated_seconds,
+                "speed_x": speed_x,
+                "provider": provider,
+                "cues": total,
+            }))
+        except Exception as exc:
+            self._events.put(("error", f"Lỗi tạo voice: {exc}"))
+
+    def open_output_folder(self) -> None:
+        srt_text = self.srt_var.get().strip()
+        if srt_text:
+            folder = Path(srt_text).expanduser().parent / "2_Dubbing_Audio"
+        else:
+            output = self.output_var.get().strip()
+            folder = Path(output).expanduser().parent / "2_Dubbing_Audio" if output else Path.cwd()
+        if not folder.exists():
+            folder = folder.parent
+
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(str(folder))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showerror("Không mở được thư mục", str(exc))
 
 
 providers = set(available_providers())
