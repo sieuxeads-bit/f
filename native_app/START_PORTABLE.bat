@@ -9,7 +9,7 @@ set "MAMBA_ROOT_PREFIX=%ROOT%\mamba_root"
 set "ENV_DIR=%ROOT%\env"
 set "PYEXE=%ENV_DIR%\python.exe"
 set "PYWEXE=%ENV_DIR%\pythonw.exe"
-set "READY=%ROOT%\.kokoro_ready_v5"
+set "READY=%ROOT%\.kokoro_ready_v6"
 set "MODELDIR=%ROOT%\models"
 set "MODEL_CPU=%MODELDIR%\kokoro-v1.0.int8.onnx"
 set "MODEL_GPU=%MODELDIR%\kokoro-v1.0.fp16.onnx"
@@ -42,7 +42,7 @@ if not exist "%PYEXE%" goto :mamba_create_error
 if errorlevel 1 goto :tk_error
 
 if not exist "%READY%" (
-  echo [2/5] Installing Kokoro libraries...
+  echo [2/5] Installing/updating Kokoro libraries...
   set PIP_DISABLE_PIP_VERSION_CHECK=1
   "%PYEXE%" -m pip install --upgrade pip
   if errorlevel 1 goto :pip_error
@@ -101,9 +101,9 @@ if "!GPU_READY!"=="1" (
 echo Runtime and models are cached in %ROOT%
 
 if exist "%PYWEXE%" (
-  start "" "%PYWEXE%" "%~dp0portable_launcher.py"
+  start "" "%PYWEXE%" "%~dp0studio_launcher.py"
 ) else (
-  start "" "%PYEXE%" "%~dp0portable_launcher.py"
+  start "" "%PYEXE%" "%~dp0studio_launcher.py"
 )
 exit /b 0
 
