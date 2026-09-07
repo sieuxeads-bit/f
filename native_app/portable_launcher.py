@@ -1,10 +1,11 @@
+import os
 from pathlib import Path
 
 from app import KokoroSrtApp
 
 
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_DIR = BASE_DIR / "models"
+MODEL_DIR = Path(os.environ.get("KOKORO_MODEL_DIR", str(BASE_DIR / "models")))
 MODEL_PATH = MODEL_DIR / "kokoro-v1.0.int8.onnx"
 VOICES_PATH = MODEL_DIR / "voices-v1.0.bin"
 DEFAULT_VOICE = "am_michael"
