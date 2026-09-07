@@ -8,8 +8,7 @@ set "RUNTIME=%CD%\runtime"
 set "PYDIR=%RUNTIME%\python"
 set "PYEXE=%PYDIR%\python.exe"
 set "PYWEXE=%PYDIR%\pythonw.exe"
-set "PYZIP=%RUNTIME%\python-embed.zip"
-set "GETPIP=%RUNTIME%\get-pip.py"
+set "PYSETUP=%RUNTIME%\python-setup.exe"
 set "READY=%RUNTIME%\.ready"
 set "MODELDIR=%CD%\models"
 set "MODEL=%MODELDIR%\kokoro-v1.0.int8.onnx"
@@ -19,35 +18,25 @@ if not exist "%RUNTIME%" mkdir "%RUNTIME%"
 if not exist "%MODELDIR%" mkdir "%MODELDIR%"
 
 if not exist "%PYEXE%" (
-  echo [1/4] Downloading portable Python %PYVER% x64...
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest 'https://www.python.org/ftp/python/%PYVER%/python-%PYVER%-embed-amd64.zip' -OutFile '%PYZIP%'"
+  echo [1/4] Preparing private Python %PYVER% x64...
+  echo No admin rights and no system Python are required.
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest 'https://www.python.org/ftp/python/%PYVER%/python-%PYVER%-amd64.exe' -OutFile '%PYSETUP%'"
   if errorlevel 1 goto :error
 
-  echo Extracting Python...
   if exist "%PYDIR%" rmdir /s /q "%PYDIR%"
-  mkdir "%PYDIR%"
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%PYZIP%' -DestinationPath '%PYDIR%' -Force"
+  echo Installing Python only inside this app folder...
+  start /wait "" "%PYSETUP%" /quiet InstallAllUsers=0 TargetDir="%PYDIR%" Include_pip=1 Include_tcltk=1 Include_launcher=0 Include_test=0 Include_doc=0 Shortcuts=0 AssociateFiles=0 PrependPath=0
   if errorlevel 1 goto :error
-  del /q "%PYZIP%" 2>nul
-
-  if exist "%PYDIR%\python312._pth" (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='%PYDIR%\python312._pth'; $c=Get-Content -Raw $p; $c=$c.Replace('#import site','import site'); Set-Content -LiteralPath $p -Value $c -Encoding ASCII"
-    if errorlevel 1 goto :error
-  )
+  del /q "%PYSETUP%" 2>nul
 )
 
 if not exist "%READY%" (
-  echo [2/4] Installing local Python libraries...
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest 'https://bootstrap.pypa.io/get-pip.py' -OutFile '%GETPIP%'"
-  if errorlevel 1 goto :error
-
-  "%PYEXE%" "%GETPIP%" --no-warn-script-location
-  if errorlevel 1 goto :error
-
+  echo [2/4] Installing local Kokoro libraries...
   set PIP_DISABLE_PIP_VERSION_CHECK=1
-  "%PYEXE%" -m pip install --no-warn-script-location -r "%CD%\requirements.txt"
+  "%PYEXE%" -m pip install --upgrade pip
   if errorlevel 1 goto :error
-
+  "%PYEXE%" -m pip install -r "%CD%\requirements.txt"
+  if errorlevel 1 goto :error
   >"%READY%" echo ready
 )
 
@@ -76,6 +65,7 @@ echo.
 echo ============================================================
 echo Setup failed. Check your Internet connection and try again.
 echo You do NOT need to install Python manually.
+echo Everything is kept inside the runtime folder of this app.
 echo ============================================================
 pause
 exit /b 1
