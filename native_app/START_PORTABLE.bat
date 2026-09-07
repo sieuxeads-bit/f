@@ -5,12 +5,12 @@ title Kokoro SRT Portable
 
 set "PYVER=3.12.8"
 set "RUNTIME=%~dp0runtime"
-set "PYDIR=%RUNTIME%\python"
+set "PYDIR=%LOCALAPPDATA%\KokoroSRT\Python312"
 set "PYEXE=%PYDIR%\python.exe"
 set "PYWEXE=%PYDIR%\pythonw.exe"
 set "PYSETUP=%RUNTIME%\python-setup.exe"
 set "PYLOG=%RUNTIME%\python-install.log"
-set "READY=%RUNTIME%\.ready"
+set "READY=%PYDIR%\.kokoro_ready"
 set "MODELDIR=%~dp0models"
 set "MODEL=%MODELDIR%\kokoro-v1.0.int8.onnx"
 set "VOICES=%MODELDIR%\voices-v1.0.bin"
@@ -21,17 +21,19 @@ if not exist "%MODELDIR%" mkdir "%MODELDIR%"
 if not exist "%PYEXE%" (
   echo [1/4] Preparing private Python %PYVER% x64...
   echo No admin rights and no system Python are required.
+  echo Python runtime location:
+  echo %PYDIR%
   echo.
+
   echo Downloading Python installer...
   powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest ('https://www.python.org/ftp/python/' + $env:PYVER + '/python-' + $env:PYVER + '-amd64.exe') -OutFile $env:PYSETUP"
   if errorlevel 1 goto :download_error
 
   if exist "%PYDIR%" rmdir /s /q "%PYDIR%"
-  if exist "%READY%" del /q "%READY%" 2>nul
 
-  echo Installing Python only inside this app folder...
+  echo Installing private Python...
   echo A small Python installer progress window may appear.
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$a=@('/passive','InstallAllUsers=0',('TargetDir=' + $env:PYDIR),'Include_exe=1','Include_lib=1','Include_pip=1','Include_tcltk=1','Include_launcher=0','Include_test=0','Include_doc=0','Shortcuts=0','AssociateFiles=0','PrependPath=0','/log',$env:PYLOG); $p=Start-Process -FilePath $env:PYSETUP -ArgumentList $a -Wait -PassThru; exit $p.ExitCode"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$args=@('/passive','InstallAllUsers=0',('TargetDir=\"' + $env:PYDIR + '\"'),'Include_exe=1','Include_lib=1','Include_pip=1','Include_tcltk=1','Include_launcher=0','Include_test=0','Include_doc=0','Shortcuts=0','AssociateFiles=0','PrependPath=0','/log',('"' + $env:PYLOG + '"')); $p=Start-Process -FilePath $env:PYSETUP -ArgumentList ($args -join ' ') -Wait -PassThru; exit $p.ExitCode"
   if errorlevel 1 goto :python_error
 
   if not exist "%PYEXE%" goto :python_error
@@ -84,7 +86,7 @@ echo.
 echo Installer log:
 echo %PYLOG%
 echo.
-echo Delete the runtime folder and run START_PORTABLE.bat again.
+echo If this still fails, send python-install.log.
 goto :error
 
 :pip_error
@@ -104,7 +106,7 @@ echo.
 echo ============================================================
 echo Setup failed. The message above identifies the failed step.
 echo No admin rights or system Python are required.
-echo Everything is kept inside this app folder.
+echo Python is kept under LocalAppData; models stay in this app folder.
 echo ============================================================
 pause
 exit /b 1
