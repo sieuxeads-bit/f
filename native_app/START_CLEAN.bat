@@ -1,6 +1,7 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
+title Kokoro SRT Studio - CLEAN R2
 
 set "ROOT=%LOCALAPPDATA%\KokoroSRT"
 set "MODELDIR=%ROOT%\models"
@@ -9,6 +10,8 @@ set "MODEL_FP32_MARKER=%ROOT%\.kokoro_model_fp32_v11"
 
 if not exist "%ROOT%" mkdir "%ROOT%"
 if not exist "%MODELDIR%" mkdir "%MODELDIR%"
+
+echo [CLEAN R2] FP32 + anti-re + legacy High Prosody guard
 
 if not exist "%MODEL_FP32%" goto :download_fp32
 if not exist "%MODEL_FP32_MARKER%" goto :download_fp32
@@ -23,6 +26,7 @@ if errorlevel 1 goto :model_error
 
 :fp32_ready
 set "KOKORO_CLEAN_MODEL=%MODEL_FP32%"
+set "KOKORO_CLEAN_BUILD=CLEAN_R2"
 call "%~dp0START_QUALITY.bat"
 exit /b %errorlevel%
 
