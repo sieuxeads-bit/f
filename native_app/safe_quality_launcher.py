@@ -26,8 +26,10 @@ quality_ns = namespace["ns"]
 studio = quality_ns["studio"]
 
 from scene_workflow import install_scene_workflow
+from progress_panel import install_progress_panel
 
 install_scene_workflow(app, quality_ns, studio)
+install_progress_panel(app, quality_ns, studio)
 
 try:
     app.title("Kokoro SRT Studio · CLEAN R3 WORKFLOW")
@@ -35,6 +37,6 @@ except Exception:
     pass
 
 app._append_log(
-    "CLEAN R3 WORKFLOW: auto detect/retry rè · cache/resume · preview/regenerate scene · parallel 1–10."
+    "CLEAN R3 WORKFLOW: auto detect/retry rè · cache/resume · preview/regenerate scene · parallel 1–10 · progress luôn hiển thị."
 )
 app.mainloop()
