@@ -184,9 +184,15 @@ def safe_make_kokoro(model, voices, device_name):
 
     def create_timed_no_group_sliding(self, *args, **kwargs):
         # Multi-cue context is already useful without sliding-window synthesis.
-        # Keeping continuous=False here removes a second layer of joins before
-        # we split the result back into per-scene WAVs. Long individual scenes
-        # still use kokoro.create(... continuous=True) in quality_launcher.
+        # create() in kokoro-onnx calls create_timed() with `continuous` as the
+        # 9th positional argument. Direct create_timed() calls usually pass it
+        # as a keyword. Handle both forms so it is never supplied twice.
+        if len(args) >= 9:
+            mutable_args = list(args)
+            mutable_args[8] = False
+            kwargs.pop("continuous", None)
+            return original_create_timed(*mutable_args, **kwargs)
+
         kwargs["continuous"] = False
         return original_create_timed(*args, **kwargs)
 
