@@ -122,20 +122,21 @@ if errorlevel 1 goto :model_error
 
 :voices_ready
 set "KOKORO_MODEL_DIR=%MODELDIR%"
-echo [5/5] Starting Kokoro SRT Studio - High Prosody...
+echo [5/5] Starting Kokoro SRT Studio - Safe High Prosody...
 if "!GPU_READY!"=="1" (
   echo GPU acceleration: READY
 ) else (
   echo GPU acceleration: unavailable - CPU mode active
 )
 echo Duration/prosody model cache: READY
+echo Safe renderer: context max 2, quiet/zero-cross cuts, no group sliding joins
 
 echo Runtime and models are cached in %ROOT%
 
 if exist "%PYWEXE%" (
-  start "" "%PYWEXE%" "%~dp0quality_launcher.py"
+  start "" "%PYWEXE%" "%~dp0safe_quality_launcher.py"
 ) else (
-  start "" "%PYEXE%" "%~dp0quality_launcher.py"
+  start "" "%PYEXE%" "%~dp0safe_quality_launcher.py"
 )
 exit /b 0
 
