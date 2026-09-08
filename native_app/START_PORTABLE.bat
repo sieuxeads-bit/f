@@ -110,9 +110,9 @@ if "!GPU_READY!"=="1" (
 echo Runtime and models are cached in %ROOT%
 
 if exist "%PYWEXE%" (
-  start "" "%PYWEXE%" "%~dp0studio_launcher.py"
+  start "" "%PYWEXE%" "%~dp0profile_launcher.py"
 ) else (
-  start "" "%PYEXE%" "%~dp0studio_launcher.py"
+  start "" "%PYEXE%" "%~dp0profile_launcher.py"
 )
 exit /b 0
 
