@@ -12,8 +12,7 @@ QUALITY_LAUNCHER = BASE_DIR / "quality_launcher.py"
 
 # Build the full Quality/Profile UI but take over the final mainloop. The clean
 # renderer keeps expressive text/prosody controls, synthesizes one SRT cue per
-# pass, uses the FP32 model, and applies a very light anti-static mastering pass
-# to suppress short high-frequency bursts without pitch/time manipulation.
+# pass, uses the FP32 model, and applies a light anti-static mastering pass.
 source = QUALITY_LAUNCHER.read_text(encoding="utf-8")
 marker = "\napp.mainloop()"
 if marker not in source:
@@ -36,13 +35,19 @@ FULL_PRECISION_MODEL = Path(
     os.environ.get("KOKORO_CLEAN_MODEL", str(MODEL_DIR / "kokoro-v1.0.onnx"))
 )
 
-CLEAN_MODE = "Clean Emotional FP32 + Anti-rè (khuyên dùng)"
+CLEAN_MODE = "Clean Emotional FP32 + Anti-rè R2 (khuyên dùng)"
 FAST_MODE = "Fast Emotional FP16"
+ALLOWED_MODES = {CLEAN_MODE, FAST_MODE, QUALITY_BALANCED}
 
 quality_combo["values"] = [CLEAN_MODE, FAST_MODE, QUALITY_BALANCED]
 context_combo["values"] = [1]
 app.quality_mode_var.set(CLEAN_MODE)
 app.context_cues_var.set(1)
+
+try:
+    app.title("Kokoro SRT Studio · CLEAN R2")
+except Exception:
+    pass
 
 # Snapshot the selected mode on the Tk/main thread before the worker starts.
 _render_mode = CLEAN_MODE
@@ -51,12 +56,7 @@ _original_studio_finish = ns["studio_finish"]
 
 
 def _clean_lowpass(audio: np.ndarray, sr: int, cutoff: float = 7600.0) -> np.ndarray:
-    """Linear-phase FIR low-pass for Kokoro's occasional high-band static.
-
-    At 24 kHz this keeps normal speech presence while strongly attenuating the
-    8-12 kHz region where the short crackle/static bursts are most obvious.
-    The symmetric FIR does not shift pitch, stretch time, or move scene timing.
-    """
+    """Linear-phase FIR low-pass for Kokoro's occasional high-band static."""
     data = np.asarray(audio, dtype=np.float32).reshape(-1)
     if data.size < 64 or sr <= 0:
         return data.copy()
@@ -82,9 +82,6 @@ def _safe_normalize(audio: np.ndarray) -> np.ndarray:
 
     rms = float(np.sqrt(np.mean(data.astype(np.float64) ** 2)))
     if rms > 1e-7:
-        # About -20 dBFS RMS. Never boost more than +1.9 dB. The previous
-        # normalizer allowed up to 3x gain, which made quiet Kokoro artifacts
-        # much easier to hear on some scenes.
         target_rms = 10.0 ** (-20.0 / 20.0)
         gain = min(target_rms / rms, 1.25)
         data *= np.float32(gain)
@@ -104,14 +101,11 @@ def clean_studio_finish(samples, sr: int, normalize: bool, natural_edges: bool):
     if audio.size == 0:
         return audio
 
-    # Remove scene DC, then suppress the narrow high-band static before level
-    # matching so the normalizer cannot re-amplify it afterwards.
     audio -= np.float32(np.mean(audio, dtype=np.float64))
     audio = _clean_lowpass(audio, int(sr), cutoff=7600.0)
     if normalize:
         audio = _safe_normalize(audio)
 
-    # Very short edge fades prevent exported scene boundaries from clicking.
     fade = min(int(0.010 * sr), len(audio) // 2)
     if fade > 1:
         ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
@@ -129,11 +123,68 @@ def clean_studio_finish(samples, sr: int, normalize: bool, natural_edges: bool):
 # The quality worker resolves studio_finish from this exec namespace at runtime.
 ns["studio_finish"] = clean_studio_finish
 
+# ---------------------------------------------------------------------------
+# Legacy-profile guard
+# ---------------------------------------------------------------------------
+# profile_launcher/quality_launcher can restore an older session asynchronously.
+# Earlier builds saved "High Prosody + Context". If that value comes back after
+# startup it bypasses the clean path. Trace the variable permanently so old
+# profiles can never silently reactivate the experimental renderer.
+_mode_guard_busy = False
+_context_guard_busy = False
+
+
+def enforce_clean_legacy_guard(*_args) -> None:
+    global _mode_guard_busy
+    if _mode_guard_busy:
+        return
+    try:
+        current = str(app.quality_mode_var.get())
+    except Exception:
+        current = CLEAN_MODE
+    if current not in ALLOWED_MODES:
+        _mode_guard_busy = True
+        try:
+            app.quality_mode_var.set(CLEAN_MODE)
+            app.context_cues_var.set(1)
+            app._append_log(
+                f"Profile cũ '{current}' đã tự chuyển sang {CLEAN_MODE}."
+            )
+        finally:
+            _mode_guard_busy = False
+
+
+def enforce_context_one(*_args) -> None:
+    global _context_guard_busy
+    if _context_guard_busy:
+        return
+    try:
+        value = int(app.context_cues_var.get())
+    except Exception:
+        value = 1
+    if value != 1:
+        _context_guard_busy = True
+        try:
+            app.context_cues_var.set(1)
+        finally:
+            _context_guard_busy = False
+
+
+app.quality_mode_var.trace_add("write", enforce_clean_legacy_guard)
+app.context_cues_var.trace_add("write", enforce_context_one)
+
 
 def clean_start_generate(self) -> None:
     global _render_mode
-    self.context_cues_var.set(1)
+
+    # Final hard guard immediately before rendering. Even if some delayed profile
+    # callback races with the Tk traces, a legacy/unknown mode is never rendered.
     mode = str(self.quality_mode_var.get())
+    if mode not in ALLOWED_MODES:
+        mode = CLEAN_MODE
+        self.quality_mode_var.set(CLEAN_MODE)
+
+    self.context_cues_var.set(1)
     _render_mode = mode
 
     if mode == CLEAN_MODE:
@@ -146,9 +197,10 @@ def clean_start_generate(self) -> None:
                 parent=self,
             )
             return
-        # Force FP32 immediately before rendering so an older saved profile
-        # cannot silently restore the FP16 path.
         self.model_var.set(str(FULL_PRECISION_MODEL))
+        self._append_log(
+            "CLEAN R2 active · FP32 · context 1 · continuous OFF · anti-rè 7.6 kHz · peak <= 0.90."
+        )
 
     _original_start_generate()
 
@@ -157,16 +209,16 @@ app.start_generate = types.MethodType(clean_start_generate, app)
 app.run_btn.configure(command=app.start_generate)
 
 
-def restore_clean_default() -> None:
-    # The profile layer restores the previous session shortly after startup.
-    current = str(app.quality_mode_var.get())
-    if current not in (CLEAN_MODE, FAST_MODE, QUALITY_BALANCED):
-        app.quality_mode_var.set(CLEAN_MODE)
-    app.context_cues_var.set(1)
+def periodic_guard() -> None:
+    enforce_clean_legacy_guard()
+    enforce_context_one()
+    app.after(500, periodic_guard)
 
 
-app.after(1400, restore_clean_default)
+# Run once after the profile restore starts and keep guarding in case a delayed
+# callback restores an older value later.
+app.after(250, periodic_guard)
 app._append_log(
-    "Clean FP32 Anti-rè: mỗi cue synth độc lập · 7.6 kHz anti-static FIR · safe normalize max +1.9 dB · cảm xúc/Smart Text vẫn ON."
+    "CLEAN R2: legacy High Prosody bị khóa · FP32 + anti-rè · context 1 · cảm xúc/Smart Text vẫn ON."
 )
 app.mainloop()
