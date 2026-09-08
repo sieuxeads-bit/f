@@ -199,7 +199,7 @@ def clean_start_generate(self) -> None:
             return
         self.model_var.set(str(FULL_PRECISION_MODEL))
         self._append_log(
-            "CLEAN R2 active · FP32 · context 1 · continuous OFF · anti-rè 7.6 kHz · peak <= 0.90."
+            "CLEAN R2 active · FP32 · context synth OFF · anti-rè 7.6 kHz · peak <= 0.90."
         )
 
     _original_start_generate()
@@ -215,10 +215,14 @@ def periodic_guard() -> None:
     app.after(500, periodic_guard)
 
 
-# Run once after the profile restore starts and keep guarding in case a delayed
-# callback restores an older value later.
+# Keep the real prosody context at one cue. The visible control is repurposed by
+# parallel_render as "Luồng render" 1..10; it never merges scene audio.
 app.after(250, periodic_guard)
+
+from parallel_render import install_parallel_render
+
+install_parallel_render(app, ns, context_combo, ns["studio"])
 app._append_log(
-    "CLEAN R2: legacy High Prosody bị khóa · FP32 + anti-rè · context 1 · cảm xúc/Smart Text vẫn ON."
+    "CLEAN R2: FP32 + anti-rè · context synth OFF · Luồng render 1–10 · mỗi scene vẫn là file riêng."
 )
 app.mainloop()
